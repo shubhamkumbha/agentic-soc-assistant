@@ -1,139 +1,126 @@
-from app.agents.entity_extractor import extract_entities
-from app.agents.intent_classifier import classify_intent
-from app.schemas.query_plan import QueryPlan
+from app.agents.intent_classifier import (
+    Intent,
+    classify_intent,
+)
+from app.schemas.query_plan import (
+    QueryPlan,
+    ToolStep,
+)
 
 
-def normalize_query(query: str) -> str:
+def analyze_query(query: str) -> QueryPlan:
     """
-    Normalize a natural language query.
-    """
+    Analyze the user's natural language query and
+    build an execution plan.
 
-    return " ".join(
-        query.lower().strip().split()
-    )
-
-
-def enrich_entities(
-    query: str,
-    entities: dict,
-) -> dict:
-    """
-    Add additional information inferred
-    from the natural language query.
+    The execution plan contains the ordered list
+    of tools the orchestrator should execute.
     """
 
-    query = query.lower()
+    classification = classify_intent(query)
 
-    # --------------------------
-    # SSH
-    # --------------------------
+    intent = classification.intent
+    params = classification.parameters
 
-    if "ssh" in query:
-        entities["dataset"] = "ssh_logs"
+    query_lower = query.lower()
 
-    # --------------------------
-    # FTP
-    # --------------------------
-
-    elif "ftp" in query:
-        entities["dataset"] = "ftp_logs"
-
-    # --------------------------
-    # HTTPS
-    # --------------------------
-
-    elif "https" in query:
-        entities["dataset"] = "https_logs"
-
-    # --------------------------
-    # SQL Injection
-    # --------------------------
-
-    elif (
-        "sql injection" in query
-        or "sqli" in query
-    ):
-        entities["dataset"] = "sqli_logs"
-
-    # --------------------------
-    # RDP
-    # --------------------------
-
-    elif "rdp" in query:
-        entities["dataset"] = "rdp_logs"
-
-    # --------------------------
-    # Octopus
-    # --------------------------
-
-    elif "octopus" in query:
-        entities["dataset"] = "octopus_logs"
-
-    # --------------------------
-    # Highest Only
-    # --------------------------
+    # --------------------------------------------------
+    # Multi-step workflow
+    # --------------------------------------------------
 
     if (
-        "highest" in query
-        or "most events" in query
+        "most active attacker" in query_lower
+        or (
+            "top attacker" in query_lower
+            and "investigate" in query_lower
+        )
     ):
-        entities["highest_only"] = True
 
-    else:
-        entities["highest_only"] = False
+        return QueryPlan(
+            intent="investigate_top_attacker",
+            multi_step=True,
+            confidence=1.0,
+            steps=[
+                ToolStep(
+                    tool="get_top_attackers",
+                    parameters={
+                        "limit": 1,
+                    },
+                ),
+                ToolStep(
+                    tool="investigate_ip",
+                    parameters={},
+                ),
+            ],
+        )
 
-    return entities
+    # --------------------------------------------------
+    # Single-step plans
+    # --------------------------------------------------
 
+    if intent == Intent.TOP_ATTACKERS:
 
-def validate_entities(
-    entities: dict,
-):
-    """
-    Validate extracted entities.
-    """
+        return QueryPlan(
+            intent=intent.value,
+            confidence=1.0,
+            steps=[
+                ToolStep(
+                    tool="get_top_attackers",
+                    parameters={
+                        "limit": params.get("limit", 5),
+                    },
+                )
+            ],
+        )
 
-    limit = entities.get("limit")
+    if intent == Intent.INVESTIGATE_IP:
 
-    if limit is not None:
+        return QueryPlan(
+            intent=intent.value,
+            confidence=1.0,
+            steps=[
+                ToolStep(
+                    tool="investigate_ip",
+                    parameters={
+                        "ip": params.get("ip"),
+                    },
+                )
+            ],
+        )
 
-        if limit < 1:
-            entities["limit"] = 1
+    if intent == Intent.PROTOCOL_SUMMARY:
 
-        elif limit > 100:
-            entities["limit"] = 100
+        return QueryPlan(
+            intent=intent.value,
+            confidence=1.0,
+            steps=[
+                ToolStep(
+                    tool="get_protocol_summary",
+                    parameters={
+                        "highest_only": params.get(
+                            "highest_only",
+                            False,
+                        ),
+                    },
+                )
+            ],
+        )
 
-    return entities
+    if intent == Intent.EVENT_SEARCH:
 
-
-def analyze_query(
-    query: str,
-) -> QueryPlan:
-    """
-    Analyze a natural language query.
-    """
-
-    normalized = normalize_query(query)
-
-    entities = extract_entities(normalized)
-
-    entities = enrich_entities(
-        normalized,
-        entities,
-    )
-
-    entities = validate_entities(
-        entities,
-    )
-
-    classification = classify_intent(
-        normalized,
-    )
+        return QueryPlan(
+            intent=intent.value,
+            confidence=1.0,
+            steps=[
+                ToolStep(
+                    tool="search_security_events",
+                    parameters=params,
+                )
+            ],
+        )
 
     return QueryPlan(
-        intent=classification.intent.value,
-        tools=[
-            classification.intent.value
-        ],
-        parameters=entities,
-        confidence=1.0,
+        intent=Intent.UNKNOWN.value,
+        confidence=0.0,
+        steps=[],
     )

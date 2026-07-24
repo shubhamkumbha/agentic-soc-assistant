@@ -1,168 +1,211 @@
 from sqlalchemy.orm import Session
 
-from app.agents.intent_classifier import Intent
 from app.agents.query_analyzer import analyze_query
+from app.agents.safety_guard import validate_query
+
+from app.tools.top_attackers import get_top_attackers
 from app.tools.ip_investigation import investigate_ip
 from app.tools.protocol_summary import get_protocol_summary
 from app.tools.search_security_events import search_security_events
-from app.tools.top_attackers import get_top_attackers
 
 
-def process_query(
-    query: str,
-    db: Session,
-):
+def process_query(query: str, db: Session):
     """
-    Main entry point for the SOC Agent.
+    Main entry point for the SOC Assistant.
 
-    Responsibilities:
-    - Receive a QueryPlan from the Query Analyzer
-    - Execute the required tool(s)
-    - Build a standardized API response
+    Flow:
+
+    User Query
+        ↓
+    Safety Guard
+        ↓
+    Query Analyzer
+        ↓
+    Execute Tool(s)
+        ↓
+    Return Standard Response
     """
 
-    # --------------------------------------------
-    # Analyze the natural language query
-    # --------------------------------------------
+    # ==========================================================
+    # Safety Guard
+    # ==========================================================
+
+    safety = validate_query(query)
+
+    if not safety.allowed:
+        return {
+            "status": "rejected",
+            "intent": "unsafe_request",
+            "tools_used": [],
+            "summary": safety.reason,
+            "data": {},
+            "limitations": [
+                "The assistant operates with read-only database access."
+            ],
+        }
+
+    # ==========================================================
+    # Build Execution Plan
+    # ==========================================================
 
     plan = analyze_query(query)
 
-    intent = Intent(plan.intent)
-    params = plan.parameters
+    result = None
+    tools_used = []
 
-    # --------------------------------------------
-    # Top Attackers
-    # --------------------------------------------
+    # ==========================================================
+    # Execute Plan
+    # ==========================================================
 
-    if intent == Intent.TOP_ATTACKERS:
+    for step in plan.steps:
 
-        limit = params.get("limit", 5)
+        tool = step.tool
+        params = step.parameters
 
-        data = get_top_attackers(
-            db=db,
-            limit=limit,
-        )
+        tools_used.append(tool)
 
-        return {
-            "status": "success",
-            "intent": intent.value,
-            "tools_used": plan.tools,
-            "summary": f"Top {len(data)} attacking IP addresses identified.",
-            "data": data,
-            "limitations": [],
-        }
+        # ------------------------------------------------------
+        # Top Attackers
+        # ------------------------------------------------------
 
-    # --------------------------------------------
-    # Investigate IP
-    # --------------------------------------------
+        if tool == "get_top_attackers":
 
-    if intent == Intent.INVESTIGATE_IP:
-
-        ip = params.get("ip")
-
-        if not ip:
-            return {
-                "status": "failed",
-                "intent": intent.value,
-                "tools_used": [],
-                "summary": "No IP address was found in the query.",
-                "data": {},
-                "limitations": [
-                    "Please provide a valid IP address."
-                ],
-            }
-
-        data = investigate_ip(
-            db=db,
-            ip_address=ip,
-        )
-
-        return {
-            "status": "success",
-            "intent": intent.value,
-            "tools_used": plan.tools,
-            "summary": f"Investigation completed for {ip}.",
-            "data": data,
-            "limitations": [],
-        }
-
-    # --------------------------------------------
-    # Protocol Summary
-    # --------------------------------------------
-
-    if intent == Intent.PROTOCOL_SUMMARY:
-
-        data = get_protocol_summary(db)
-
-        highest_only = params.get(
-            "highest_only",
-            False,
-        )
-
-        if highest_only and data:
-
-            highest_count = max(
-                item["event_count"]
-                for item in data
+            result = get_top_attackers(
+                db=db,
+                limit=params.get("limit", 5),
             )
 
-            data = [
-                item
-                for item in data
-                if item["event_count"] == highest_count
-            ]
+        # ------------------------------------------------------
+        # Investigate IP
+        # ------------------------------------------------------
+
+        elif tool == "investigate_ip":
+
+            ip = params.get("ip")
+
+            # Multi-step workflow
+            if not ip:
+
+                if (
+                    isinstance(result, list)
+                    and len(result) > 0
+                ):
+                    ip = result[0]["source_ip"]
+
+            if not ip:
+
+                return {
+                    "status": "failed",
+                    "intent": plan.intent,
+                    "tools_used": tools_used,
+                    "summary": "No IP address available for investigation.",
+                    "data": {},
+                    "limitations": [
+                        "Please provide a valid IP address."
+                    ],
+                }
+
+            result = investigate_ip(
+                db=db,
+                ip_address=ip,
+            )
+
+        # ------------------------------------------------------
+        # Protocol Summary
+        # ------------------------------------------------------
+
+        elif tool == "get_protocol_summary":
+
+            protocol_data = get_protocol_summary(db)
+
+            if params.get("highest_only"):
+
+                highest = max(
+                    item["event_count"]
+                    for item in protocol_data
+                )
+
+                protocol_data = [
+                    item
+                    for item in protocol_data
+                    if item["event_count"] == highest
+                ]
+
+            result = protocol_data
+
+        # ------------------------------------------------------
+        # Search Events
+        # ------------------------------------------------------
+
+        elif tool == "search_security_events":
+
+            result = search_security_events(
+                db=db,
+                filters=params,
+                limit=params.get("limit", 50),
+            )
+
+    # ==========================================================
+    # Build Summary
+    # ==========================================================
+
+    if plan.multi_step:
+
+        summary = (
+            "The most active attacker was identified and "
+            "automatically investigated successfully."
+        )
+
+    elif plan.intent == "get_top_attackers":
+
+        summary = (
+            f"Top {len(result)} attacking IP address(es) "
+            "were identified across all monitored datasets."
+        )
+
+    elif plan.intent == "investigate_ip":
+
+        summary = (
+            "IP investigation completed successfully."
+        )
+
+    elif plan.intent == "get_protocol_summary":
+
+        if (
+            len(plan.steps) > 0
+            and plan.steps[0].parameters.get("highest_only")
+        ):
 
             summary = (
-                f"{len(data)} dataset(s) contain the highest number of events."
+                "The dataset(s) with the highest number of "
+                "security events were identified."
             )
 
         else:
 
             summary = (
-                "Protocol and dataset summary retrieved successfully."
+                "Protocol statistics were generated successfully."
             )
 
-        return {
-            "status": "success",
-            "intent": intent.value,
-            "tools_used": plan.tools,
-            "summary": summary,
-            "data": data,
-            "limitations": [],
-        }
+    elif plan.intent == "search_security_events":
 
-    # --------------------------------------------
-    # Search Security Events
-    # --------------------------------------------
-
-    if intent == Intent.EVENT_SEARCH:
-
-        data = search_security_events(
-            db=db,
-            filters=params,
-            limit=params.get("limit", 50),
+        summary = (
+            f"Found {len(result)} matching security event(s)."
         )
 
-        return {
-            "status": "success",
-            "intent": intent.value,
-            "tools_used": plan.tools,
-            "summary": f"Found {len(data)} matching security event(s).",
-            "data": data,
-            "limitations": [],
-        }
+    else:
 
-    # --------------------------------------------
-    # Unknown
-    # --------------------------------------------
+        summary = "Query executed successfully."
+
+    # ==========================================================
+    # Final Response
+    # ==========================================================
 
     return {
         "status": "success",
-        "intent": intent.value,
-        "tools_used": [],
-        "summary": "Unable to determine the user's intent.",
-        "data": [],
-        "limitations": [
-            "Try rephrasing your query."
-        ],
+        "intent": plan.intent,
+        "tools_used": tools_used,
+        "summary": summary,
+        "data": result,
+        "limitations": [],
     }

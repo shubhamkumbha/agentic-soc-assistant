@@ -30,7 +30,7 @@ PROTOCOL_KEYWORDS = {
 }
 
 # --------------------------------------------------
-# Common Usernames
+# Usernames
 # --------------------------------------------------
 
 COMMON_USERNAMES = [
@@ -69,120 +69,91 @@ ATTACK_TYPES = {
     "reconnaissance": "Reconnaissance",
 }
 
-# --------------------------------------------------
-# Highest Keywords
-# --------------------------------------------------
-
-HIGHEST_KEYWORDS = [
+TOP_WORDS = {
+    "top",
     "highest",
-    "most",
     "largest",
     "maximum",
-    "top",
-]
+    "most",
+}
 
 
 def extract_entities(query: str) -> dict:
     """
-    Extract structured entities from a natural-language query.
-
-    Returns a dictionary containing only detected entities.
+    Extract structured entities from natural language.
     """
 
     query = query.lower().strip()
 
     entities = {}
 
-    # --------------------------------------------------
-    # IP Address
-    # --------------------------------------------------
+    # ---------------- IP ----------------
 
-    ip_match = re.search(
+    ip = re.search(
         r"\b(?:\d{1,3}\.){3}\d{1,3}\b",
         query,
     )
 
-    if ip_match:
-        entities["ip"] = ip_match.group()
+    if ip:
+        entities["ip"] = ip.group()
 
-    # --------------------------------------------------
-    # Result Limit
-    # --------------------------------------------------
+    # ---------------- LIMIT ----------------
 
-    limit_match = re.search(
+    limit = re.search(
         r"\b(?:top|first|last|show)\s+(\d+)\b",
         query,
     )
 
-    if limit_match:
-        entities["limit"] = int(limit_match.group(1))
+    entities["limit"] = int(limit.group(1)) if limit else 5
 
-    else:
-        entities["limit"] = 50
-
-    # --------------------------------------------------
-    # Dataset
-    # --------------------------------------------------
+    # ---------------- DATASET ----------------
 
     for keyword, dataset in DATASET_KEYWORDS.items():
-
         if keyword in query:
             entities["dataset"] = dataset
             break
 
-    # --------------------------------------------------
-    # Protocol
-    # --------------------------------------------------
+    # ---------------- PROTOCOL ----------------
 
     for keyword, protocol in PROTOCOL_KEYWORDS.items():
-
         if keyword in query:
             entities["protocol"] = protocol
             break
 
-    # --------------------------------------------------
-    # Username
-    # --------------------------------------------------
+    # ---------------- USERNAME ----------------
 
     for username in COMMON_USERNAMES:
-
-        pattern = rf"\b{re.escape(username)}\b"
-
-        if re.search(pattern, query):
+        if re.search(rf"\b{username}\b", query):
             entities["username"] = username
             break
 
-    # --------------------------------------------------
-    # Status
-    # --------------------------------------------------
+    # ---------------- STATUS ----------------
 
-    for keyword, status in STATUS_KEYWORDS.items():
-
+    for keyword, value in STATUS_KEYWORDS.items():
         if keyword in query:
-            entities["status"] = status
+            entities["status"] = value
             break
 
-    # --------------------------------------------------
-    # Attack Type
-    # --------------------------------------------------
+    # ---------------- EVENT TYPE ----------------
 
-    for keyword, attack_type in ATTACK_TYPES.items():
-
+    for keyword, attack in ATTACK_TYPES.items():
         if keyword in query:
-            entities["event_type"] = attack_type
+            entities["event_type"] = attack
             break
 
-    # --------------------------------------------------
-    # Highest Only
-    # --------------------------------------------------
+    # ---------------- Dataset Summary ----------------
 
-    if any(word in query for word in HIGHEST_KEYWORDS):
-
-        if (
-            "event" in query
-            or "dataset" in query
+    entities["highest_only"] = (
+        any(word in query for word in TOP_WORDS)
+        and (
+            "dataset" in query
+            or "datasets" in query
             or "protocol" in query
-        ):
-            entities["highest_only"] = True
+            or "protocols" in query
+            or "event count" in query
+            or "number of events" in query
+            or "events" in query
+        )
+    )
 
     return entities
