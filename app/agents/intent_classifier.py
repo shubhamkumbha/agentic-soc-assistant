@@ -1,4 +1,7 @@
+from dataclasses import dataclass
 from enum import Enum
+
+from app.agents.entity_extractor import extract_entities
 
 
 class Intent(str, Enum):
@@ -9,86 +12,123 @@ class Intent(str, Enum):
     UNKNOWN = "unknown"
 
 
-TOP_ATTACKERS_KEYWORDS = [
-    "top attacker",
-    "top attackers",
-    "top ip",
-    "top ips",
-    "top attacking",
-    "most active",
-    "most attacks",
-    "highest attacks",
-]
-
-INVESTIGATE_IP_KEYWORDS = [
-    "investigate",
-    "lookup",
-    "details",
-    "trace",
-]
-
-PROTOCOL_SUMMARY_KEYWORDS = [
-    "protocol",
-    "summary",
-    "protocol summary",
-    "dataset summary",
-]
-
-EVENT_SEARCH_KEYWORDS = [
-    "search",
-    "find",
-    "event",
-    "events",
-]
-
-
-def contains_any(text: str, keywords: list[str]) -> bool:
-    return any(keyword in text for keyword in keywords)
-
-
-def classify_intent(query: str) -> Intent:
+@dataclass
+class ClassificationResult:
     """
-    Rule-based intent classifier.
+    Result returned by the intent classifier.
+    """
+
+    intent: Intent
+    parameters: dict
+
+
+def classify_intent(query: str) -> ClassificationResult:
+    """
+    Classify the user's intent.
+
+    Entity extraction is performed first.
+    Intent classification then uses both the
+    extracted entities and the original query.
     """
 
     query = query.lower().strip()
 
-    # -----------------------------
+    entities = extract_entities(query)
+
+    # --------------------------------------------------
     # Top Attackers
-    # -----------------------------
+    # --------------------------------------------------
+
     if (
-        contains_any(query, TOP_ATTACKERS_KEYWORDS)
+        "attacker" in query
+        or "attackers" in query
+        or "top ip" in query
+        or "top ips" in query
+    ):
+        return ClassificationResult(
+            intent=Intent.TOP_ATTACKERS,
+            parameters=entities,
+        )
+
+    # --------------------------------------------------
+    # Investigate IP
+    # --------------------------------------------------
+
+    if (
+        "investigate" in query
+        or "lookup" in query
+        or "trace" in query
         or (
-            "top" in query
-            and (
-                "attacker" in query
-                or "attackers" in query
-                or "ip" in query
-                or "ips" in query
-            )
+            "ip" in entities
+            and "activity" not in query
+            and "events" not in query
+            and "logs" not in query
         )
     ):
-        return Intent.TOP_ATTACKERS
+        return ClassificationResult(
+            intent=Intent.INVESTIGATE_IP,
+            parameters=entities,
+        )
 
-    # -----------------------------
-    # Investigate IP
-    # -----------------------------
-    if (
-        contains_any(query, INVESTIGATE_IP_KEYWORDS)
-        and ("ip" in query)
-    ):
-        return Intent.INVESTIGATE_IP
-
-    # -----------------------------
+    # --------------------------------------------------
     # Protocol Summary
-    # -----------------------------
-    if contains_any(query, PROTOCOL_SUMMARY_KEYWORDS):
-        return Intent.PROTOCOL_SUMMARY
+    # --------------------------------------------------
 
-    # -----------------------------
+    if entities.get("highest_only"):
+
+        return ClassificationResult(
+            intent=Intent.PROTOCOL_SUMMARY,
+            parameters=entities,
+        )
+
+    if (
+        "protocol summary" in query
+        or "dataset summary" in query
+        or "summary" == query
+    ):
+
+        return ClassificationResult(
+            intent=Intent.PROTOCOL_SUMMARY,
+            parameters=entities,
+        )
+
+    # --------------------------------------------------
     # Event Search
-    # -----------------------------
-    if contains_any(query, EVENT_SEARCH_KEYWORDS):
-        return Intent.EVENT_SEARCH
+    # --------------------------------------------------
 
-    return Intent.UNKNOWN
+    if any(
+        key in entities
+        for key in (
+            "dataset",
+            "protocol",
+            "username",
+            "status",
+            "event_type",
+        )
+    ):
+
+        return ClassificationResult(
+            intent=Intent.EVENT_SEARCH,
+            parameters=entities,
+        )
+
+    if (
+        "activity" in query
+        or "events" in query
+        or "logs" in query
+        or "search" in query
+    ):
+
+        return ClassificationResult(
+            intent=Intent.EVENT_SEARCH,
+            parameters=entities,
+        )
+
+    # --------------------------------------------------
+    # Unknown
+    # --------------------------------------------------
+
+    return ClassificationResult(
+        intent=Intent.UNKNOWN,
+        parameters=entities,
+    )

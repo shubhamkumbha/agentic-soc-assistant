@@ -1,10 +1,10 @@
 from sqlalchemy.orm import Session
 
-from app.agents.intent_classifier import (
-    Intent,
-    classify_intent,
-)
+from app.agents.intent_classifier import Intent
+from app.agents.query_analyzer import analyze_query
 from app.tools.ip_investigation import investigate_ip
+from app.tools.protocol_summary import get_protocol_summary
+from app.tools.search_security_events import search_security_events
 from app.tools.top_attackers import get_top_attackers
 
 
@@ -14,86 +14,155 @@ def process_query(
 ):
     """
     Main entry point for the SOC Agent.
+
+    Responsibilities:
+    - Receive a QueryPlan from the Query Analyzer
+    - Execute the required tool(s)
+    - Build a standardized API response
     """
 
-    intent = classify_intent(query)
+    # --------------------------------------------
+    # Analyze the natural language query
+    # --------------------------------------------
 
-    # -------------------------------------------------
-    # Tool 1 - Top Attackers
-    # -------------------------------------------------
+    plan = analyze_query(query)
+
+    intent = Intent(plan.intent)
+    params = plan.parameters
+
+    # --------------------------------------------
+    # Top Attackers
+    # --------------------------------------------
 
     if intent == Intent.TOP_ATTACKERS:
 
-        data = get_top_attackers(db)
+        limit = params.get("limit", 5)
 
-        return {
-            "status": "success",
-            "intent": intent.value,
-            "tools_used": [
-                "get_top_attackers",
-            ],
-            "summary": "Top attacking IP addresses retrieved successfully.",
-            "data": data,
-            "limitations": [],
-        }
-
-    # -------------------------------------------------
-    # Tool 2 - Investigate IP
-    # -------------------------------------------------
-
-    if intent == Intent.INVESTIGATE_IP:
-
-        ip_address = None
-
-        for word in query.split():
-
-            word = word.strip(",.?!")
-
-            # Very simple IPv4 detection
-            if word.count(".") == 3:
-                ip_address = word
-                break
-
-        if not ip_address:
-
-            return {
-                "status": "error",
-                "intent": intent.value,
-                "tools_used": [],
-                "summary": "No IP address found in the query.",
-                "data": [],
-                "limitations": [
-                    "Please provide a valid IP address.",
-                ],
-            }
-
-        result = investigate_ip(
+        data = get_top_attackers(
             db=db,
-            ip_address=ip_address,
+            limit=limit,
         )
 
         return {
             "status": "success",
             "intent": intent.value,
-            "tools_used": [
-                "investigate_ip",
-            ],
-            "summary": f"Investigation completed for {ip_address}.",
-            "data": result,
+            "tools_used": plan.tools,
+            "summary": f"Top {len(data)} attacking IP addresses identified.",
+            "data": data,
             "limitations": [],
         }
 
-    # -------------------------------------------------
-    # Unknown Intent
-    # -------------------------------------------------
+    # --------------------------------------------
+    # Investigate IP
+    # --------------------------------------------
+
+    if intent == Intent.INVESTIGATE_IP:
+
+        ip = params.get("ip")
+
+        if not ip:
+            return {
+                "status": "failed",
+                "intent": intent.value,
+                "tools_used": [],
+                "summary": "No IP address was found in the query.",
+                "data": {},
+                "limitations": [
+                    "Please provide a valid IP address."
+                ],
+            }
+
+        data = investigate_ip(
+            db=db,
+            ip_address=ip,
+        )
+
+        return {
+            "status": "success",
+            "intent": intent.value,
+            "tools_used": plan.tools,
+            "summary": f"Investigation completed for {ip}.",
+            "data": data,
+            "limitations": [],
+        }
+
+    # --------------------------------------------
+    # Protocol Summary
+    # --------------------------------------------
+
+    if intent == Intent.PROTOCOL_SUMMARY:
+
+        data = get_protocol_summary(db)
+
+        highest_only = params.get(
+            "highest_only",
+            False,
+        )
+
+        if highest_only and data:
+
+            highest_count = max(
+                item["event_count"]
+                for item in data
+            )
+
+            data = [
+                item
+                for item in data
+                if item["event_count"] == highest_count
+            ]
+
+            summary = (
+                f"{len(data)} dataset(s) contain the highest number of events."
+            )
+
+        else:
+
+            summary = (
+                "Protocol and dataset summary retrieved successfully."
+            )
+
+        return {
+            "status": "success",
+            "intent": intent.value,
+            "tools_used": plan.tools,
+            "summary": summary,
+            "data": data,
+            "limitations": [],
+        }
+
+    # --------------------------------------------
+    # Search Security Events
+    # --------------------------------------------
+
+    if intent == Intent.EVENT_SEARCH:
+
+        data = search_security_events(
+            db=db,
+            filters=params,
+            limit=params.get("limit", 50),
+        )
+
+        return {
+            "status": "success",
+            "intent": intent.value,
+            "tools_used": plan.tools,
+            "summary": f"Found {len(data)} matching security event(s).",
+            "data": data,
+            "limitations": [],
+        }
+
+    # --------------------------------------------
+    # Unknown
+    # --------------------------------------------
 
     return {
         "status": "success",
         "intent": intent.value,
         "tools_used": [],
-        "summary": "Intent not implemented yet.",
+        "summary": "Unable to determine the user's intent.",
         "data": [],
         "limitations": [
-            "This intent will be implemented in a later step.",
+            "Try rephrasing your query."
         ],
     }

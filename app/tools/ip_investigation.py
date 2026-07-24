@@ -8,6 +8,7 @@ from app.models.log_models import (
     SQLILog,
     SSHLog,
 )
+from app.utils.log_normalizer import normalize_log
 
 LOG_TABLES = [
     FTPLog,
@@ -19,78 +20,79 @@ LOG_TABLES = [
 ]
 
 
-def extract_source_ip(document: dict) -> str | None:
-    """
-    Extract source IP from different log formats.
-    """
-
-    public = document.get("public", {})
-
-    if isinstance(public, dict):
-        source = public.get("source", {})
-
-        if isinstance(source, dict):
-            ip = source.get("ip")
-
-            if ip:
-                return ip
-
-    for key in (
-        "src_ip",
-        "source_ip",
-        "ip",
-        "client_ip",
-        "remote_ip",
-    ):
-        ip = document.get(key)
-
-        if ip:
-            return ip
-
-    return None
-
-
 def investigate_ip(
     db: Session,
     ip_address: str,
 ):
     """
-    Investigate an IP address across all available log datasets.
+    Investigate an IP across every supported dataset.
+    Uses normalized log events instead of dataset-specific parsing.
     """
 
     total_events = 0
-    datasets = []
+
+    first_seen = None
+    last_seen = None
+
+    datasets = set()
+    protocols = set()
+    usernames = set()
+    paths = set()
+    commands = set()
+    payloads = set()
 
     for table in LOG_TABLES:
 
         rows = db.query(table.document).all()
 
-        table_count = 0
-
         for (document,) in rows:
 
-            source_ip = extract_source_ip(document)
+            event = normalize_log(
+                document=document,
+                dataset=table.__tablename__,
+            )
 
-            if source_ip != ip_address:
+            if event["source_ip"] != ip_address:
                 continue
 
-            table_count += 1
+            total_events += 1
 
-        if table_count > 0:
+            datasets.add(event["dataset"])
 
-            datasets.append(table.__tablename__)
+            if event["protocol"]:
+                protocols.add(event["protocol"])
 
-            total_events += table_count
+            if event["username"]:
+                usernames.add(event["username"])
+
+            if event["path"]:
+                paths.add(event["path"])
+
+            if event["command"]:
+                commands.add(event["command"])
+
+            if event["payload"]:
+                payloads.add(event["payload"])
+
+            timestamp = event["timestamp"]
+
+            if timestamp:
+
+                if first_seen is None or timestamp < first_seen:
+                    first_seen = timestamp
+
+                if last_seen is None or timestamp > last_seen:
+                    last_seen = timestamp
 
     return {
         "source_ip": ip_address,
         "event_count": total_events,
-        "first_seen": None,
-        "last_seen": None,
-        "datasets": datasets,
-        "protocols": [],
-        "usernames": [],
-        "paths": [],
-        "commands": [],
-        "payloads": [],
+        "first_seen": first_seen,
+        "last_seen": last_seen,
+        "datasets": sorted(datasets),
+        "protocols": sorted(protocols),
+        "usernames": sorted(usernames),
+        "paths": sorted(paths),
+        "commands": sorted(commands),
+        "payloads": sorted(payloads),
     }
