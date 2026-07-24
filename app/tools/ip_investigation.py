@@ -84,7 +84,7 @@ def investigate_ip(
                 if last_seen is None or timestamp > last_seen:
                     last_seen = timestamp
 
-    return {
+    result = {
         "source_ip": ip_address,
         "event_count": total_events,
         "first_seen": first_seen,
@@ -95,4 +95,17 @@ def investigate_ip(
         "paths": sorted(paths),
         "commands": sorted(commands),
         "payloads": sorted(payloads),
+    }
+
+    if total_events == 0:
+        return {
+            "data": result,
+            "limitations": [
+                "The supplied IP address was not found in the available datasets.",
+            ],
+        }
+
+    return {
+        "data": result,
+        "limitations": [],
     }

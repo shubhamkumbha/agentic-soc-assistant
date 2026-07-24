@@ -40,4 +40,15 @@ def get_protocol_summary(db):
         reverse=True,
     )
 
-    return summary
+    if not summary:
+        return {
+            "data": [],
+            "limitations": [
+                "Protocol summary information is unavailable in the supplied dataset.",
+            ],
+        }
+
+    return {
+        "data": summary,
+        "limitations": [],
+    }

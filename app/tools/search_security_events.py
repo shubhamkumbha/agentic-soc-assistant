@@ -106,6 +106,20 @@ def search_security_events(
             results.append(event)
 
             if len(results) >= limit:
-                return results
+                return {
+                    "data": results,
+                    "limitations": [],
+                }
 
-    return results
+    if not results:
+        return {
+            "data": [],
+            "limitations": [
+                "The requested information is unavailable in the supplied dataset.",
+            ],
+        }
+
+    return {
+        "data": results,
+        "limitations": [],
+    }

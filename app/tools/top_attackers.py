@@ -85,10 +85,23 @@ def get_top_attackers(
         reverse=True,
     )
 
-    return [
+    result = [
         {
             "source_ip": ip,
             "event_count": count,
         }
         for ip, count in ranked[:limit]
     ]
+
+    if not result:
+        return {
+            "data": [],
+            "limitations": [
+                "No attacker information is available in the supplied dataset.",
+            ],
+        }
+
+    return {
+        "data": result,
+        "limitations": [],
+    }

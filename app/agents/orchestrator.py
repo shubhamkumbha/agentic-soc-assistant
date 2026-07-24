@@ -52,6 +52,7 @@ def process_query(query: str, db: Session):
 
     result = None
     tools_used = []
+    limitations = []
 
     # ==========================================================
     # Execute Plan
@@ -70,10 +71,13 @@ def process_query(query: str, db: Session):
 
         if tool == "get_top_attackers":
 
-            result = get_top_attackers(
+            tool_result = get_top_attackers(
                 db=db,
                 limit=params.get("limit", 5),
             )
+
+            result = tool_result["data"]
+            limitations = tool_result["limitations"]
 
         # ------------------------------------------------------
         # Investigate IP
@@ -105,10 +109,13 @@ def process_query(query: str, db: Session):
                     ],
                 }
 
-            result = investigate_ip(
+            tool_result = investigate_ip(
                 db=db,
                 ip_address=ip,
             )
+
+            result = tool_result["data"]
+            limitations = tool_result["limitations"]
 
         # ------------------------------------------------------
         # Protocol Summary
@@ -116,7 +123,10 @@ def process_query(query: str, db: Session):
 
         elif tool == "get_protocol_summary":
 
-            protocol_data = get_protocol_summary(db)
+            tool_result = get_protocol_summary(db)
+
+            protocol_data = tool_result["data"]
+            limitations = tool_result["limitations"]
 
             if params.get("highest_only"):
 
@@ -139,11 +149,14 @@ def process_query(query: str, db: Session):
 
         elif tool == "search_security_events":
 
-            result = search_security_events(
+            tool_result = search_security_events(
                 db=db,
                 filters=params,
                 limit=params.get("limit", 50),
             )
+
+            result = tool_result["data"]
+            limitations = tool_result["limitations"]
 
     # ==========================================================
     # Build Summary
@@ -207,5 +220,5 @@ def process_query(query: str, db: Session):
         "tools_used": tools_used,
         "summary": summary,
         "data": result,
-        "limitations": [],
+        "limitations": limitations,
     }
